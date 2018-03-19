@@ -1,0 +1,106 @@
+# -*- coding: utf-8 -*-
+import arcpy
+import os,math,shutil,sys,string
+arcpy.ImportToolbox(r'C:\Program Files (x86)\ArcGIS\Desktop10.2\ArcToolbox\Toolboxes\Samples .tbx')
+def convert_list(input_list):
+    output_list=[]
+    input_list=input_list[1:]
+    for i in input_list:
+        output_list.append([i.split(',')[0],i.split(',')[1],i.split(',')[2][:-1]])
+    return output_list
+#加密折点
+def point_ADD(input_list,pro_type,n):
+    output_list=[]
+    fid = 0
+    for i in range(len(input_list)-1):
+        fid += 1
+        output_list.append([fid,input_list[i][1],input_list[i][2]])    
+        x0=float(input_list[i][1]);y0=float(input_list[i][2])
+        x1=float(input_list[i+1][1]);y1=float(input_list[i+1][2])
+        if pro_type=='intact':#补全处理分支
+           lenth=math.sqrt(pow((x1-x0),2)+pow((y1-y0),2));m=int(lenth//n)
+           if lenth>20:
+              if m==1:m=2
+              for j in range(1,m):
+                  fid += 1;x_add = x0+(x1-x0)*j/m;y_add = y0+ (y1-y0)*j/m
+                  output_list.append([fid,x_add,y_add])
+        if pro_type=='densify':#加密处理分支
+           for j in range(1,n):
+               fid += 1;x_add = x0+(x1-x0)*j/n;y_add = y0+(y1-y0)*j/n
+               output_list.append([fid,x_add,y_add])
+    output_list.append([fid+1,output_list[0][1],output_list[0][2]])
+    return output_list
+def point_Smooth(input_list):#中值平滑处理
+    output_list=[]
+    for i in range(len(input_list)-1):
+        x=0.5*(float(input_list[i][1])+float(input_list[i+1][1]))
+        y=0.5*(float(input_list[i][2])+float(input_list[i+1][2]))
+        output_list.append([i+1,x,y])
+    output_list.append([i+2,output_list[0][1],output_list[0][2]])
+    return output_list
+def get_angle(input_list):#计算（x1，y1）处折角角度
+    x0=float(input_list[0][1]);y0=float(input_list[0][2])
+    x1=float(input_list[1][1]);y1=float(input_list[1][2])
+    x2=float(input_list[2][1]);y2=float(input_list[2][2])
+    x10=(x0-x1,y0-y1);x10_mod=math.sqrt(pow(x10[0],2)+pow(x10[1],2))
+    x12=(x2-x1,y2-y1);x12_mod=math.sqrt(pow(x12[0],2)+pow(x12[1],2))
+    slj=x10[0]*x12[0]+x10[1]*x12[1];modj=x10_mod*x12_mod#计算向量的数量积和模乘积
+    if slj/modj>1:slj=modj
+    if slj/modj<-1:slj=-1*modj
+    return math.acos(slj/modj)*180/math.pi
+def get_minangle(input_list):#计算最小角
+    input_list.append([input_list[-1][0]+1,input_list[1][1],input_list[1][2]])
+    angle=180
+    for i in range(len(input_list)-2):
+        if get_angle(input_list[i:i+3])<angle:angle = get_angle(input_list[i:i+3])
+    input_list.pop()
+    return angle
+def ToGisTxT(input_list,future_type,save_dir):
+    if os.path.exists(save_dir):os.remove(save_dir)
+    output_txt = open(save_dir,'a')
+    output_txt.write(future_type+'\n')
+    fid=0
+    for i in input_list:
+        fid+=1
+        output_txt.write(str(i[0])+' '+str(i[1])+' '+str(i[2])+' nan nan\n')
+    output_txt.write('END')        
+    output_txt.close()
+def gen_txt(input_list,list_head,open_type,save_dir):
+    if os.path.exists(save_dir):os.remove(save_dir)
+    input_f=open(save_dir,open_type)
+    input_f.write(list_head+'\n')
+    for i in input_list:
+        input_f.write(str(i[0])+','+str(i[1])+','+str(i[2])+'\n')
+    input_f.close()
+# Check out any necessary licenses
+arcpy.CheckOutExtension("spatial")
+#文件路径
+orininaltxt_dir = r'D:\poyang\Export_Output.txt'
+intact_dir = r'D:\poyang\intact.txt'
+densify_dir = r'D:\poyang\densify.txt'
+smooth_dir = r'D:\poyang\smooth.txt'
+polylinetxt_dir = r'D:\poyang\gistxt.txt'
+output_feature_class = r'D:\poyang\shpfile\Tgistxt2.shp'
+
+#读取原始数据并加密折点
+input_f=open(orininaltxt_dir,'r+')
+input_list=input_f.readlines()
+input_f.close()
+#处理
+#补全点集
+input_list = convert_list(input_list)#lines to list
+intact_list=point_ADD(input_list,'intact',16);gen_txt(intact_list,'OBJECTID,POINT_X,POINT_Y','a',intact_dir)
+ToGisTxT(intact_list,"Polyline",r'D:\poyang\gistxt_intact.txt')
+#平滑处理
+smooth_list=point_Smooth(intact_list)
+while get_minangle(smooth_list)<160:
+      smooth_list=point_Smooth(smooth_list)
+gen_txt(smooth_list,'OBJECTID,POINT_X,POINT_Y','a',smooth_dir)
+ToGisTxT(smooth_list,"Polyline",r'D:\poyang\gistxt_smooth.txt')
+print get_minangle(smooth_list)
+#点序列加密处理
+densify_list=point_ADD(smooth_list,'densify',3);gen_txt(densify_list,'OBJECTID,POINT_X,POINT_Y','a',densify_dir)
+ToGisTxT(densify_list,"Polyline",polylinetxt_dir)
+#生成polyline
+spatialRe=arcpy.SpatialReference(r'D:\poyang\shpfile\Tgistxt.prj')
+arcpy.CreateFeaturesFromTextFile_samples(polylinetxt_dir,'1234.123',output_feature_class,spatialRe)
